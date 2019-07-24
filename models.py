@@ -80,6 +80,31 @@ for name, model in location_choice_models_lacontrol.items():
                                          model.choosers,
                                          choice_function=lcm_utils.unit_choices)
 
+# HLCM CALIBRATION MODELS - LARGE AREA CONTROL
+location_choice_models_calib = {}
+hlcm_step_names_calib = []
+model_configs = lcm_utils.get_model_category_configs('yaml_configs_la_control_unit_level_calib.yaml')
+for model_category_name, model_category_attributes in model_configs.items():
+    if model_category_attributes['model_type'] == 'location_choice':
+        model_config_files = model_category_attributes['config_filenames']
+
+        for model_config in model_config_files:
+            model = lcm_utils.create_lcm_from_config(model_config,
+                                                     model_category_attributes)
+            location_choice_models_calib[model.name] = model
+
+            if model_category_name == 'hlcm':
+                hlcm_step_names_calib.append(model.name)
+
+lcm_models_updated = merge_two_dicts(orca.get_injectable('location_choice_models'), location_choice_models_calib)
+orca.add_injectable('location_choice_models', lcm_models_updated)
+orca.add_injectable('hlcm_step_names_lacontrol_calib', sorted(hlcm_step_names_calib, reverse=True))
+
+for name, model in location_choice_models_calib.items():
+    lcm_utils.register_choice_model_step(model.name,
+                                         model.choosers,
+                                         choice_function=lcm_utils.unit_choices)
+
 @orca.step()
 def elcm_home_based(jobs, households):
     wrap_jobs = jobs
@@ -243,19 +268,19 @@ def households_transition(households, persons, annual_household_control_totals, 
     # fix indexes
     out_hh_fixed = []
     out_p_fixed = []
-    hhidmax = region_hh.index.values.max() + 1
-    pidmax = region_p.index.values.max() + 1
+    hhidmax = int(region_hh.index.values.max() + 1)
+    pidmax = int(region_p.index.values.max() + 1)
     for hh, p in out:
         hh.index.name = 'household_id'
         hh = hh.reset_index()
         hh['household_id_old'] = hh['household_id']
-        new_hh = (hh.building_id == -1).sum()
+        new_hh = int((hh.building_id == -1).sum())
         hh.loc[hh.building_id == -1, 'household_id'] = range(hhidmax, hhidmax + new_hh)
         hhidmax += new_hh
         hhid_map = hh[['household_id_old', 'household_id']].set_index('household_id_old')
         p.index.name = 'person_id'
         p = pd.merge(p.reset_index(), hhid_map, left_on='household_id', right_index=True)
-        new_p = (p.household_id_x != p.household_id_y).sum()
+        new_p = int((p.household_id_x != p.household_id_y).sum())
         p.loc[p.household_id_x != p.household_id_y, 'person_id'] = range(pidmax, pidmax + new_p)
         pidmax += new_p
         p['household_id'] = p['household_id_y']
@@ -639,12 +664,12 @@ def refiner(jobs, households, buildings, persons, year, refiner_events, group_qu
 
         persons_columns = persons.local_columns
         persons = persons.to_frame(persons_columns)
-        pidmax = persons.index.values.max() + 1
+        pidmax = int(persons.index.values.max() + 1)
 
         hh_index_lookup = households[["household_id_old"]].reset_index().set_index("household_id_old")
         hh_index_lookup.columns = ['household_id']
         p = pd.merge(persons.reset_index(), hh_index_lookup, left_on='household_id', right_index=True)
-        new_p = (p.household_id_x != p.household_id_y).sum()
+        new_p = int((p.household_id_x != p.household_id_y).sum())
         p.loc[p.household_id_x != p.household_id_y, 'person_id'] = range(pidmax, pidmax + new_p)
         p['household_id'] = p['household_id_y']
         persons = p.set_index('person_id')
@@ -772,8 +797,9 @@ def parcel_average_price(use):
     # Copied from variables.py
     parcels_wrapper = orca.get_table('parcels')
     if len(orca.get_table('nodes_walk')) == 0:
-        # if nodes isn't generated yet
-        return pd.Series(index=parcels_wrapper.index)
+        # if nodes isn't generated yet, get average on zones
+        return misc.reindex(orca.get_table('zones')[use],
+                            parcels_wrapper.zone_id)
     return misc.reindex(orca.get_table('nodes_walk')[use],
                         parcels_wrapper.nodeid_walk)
 
@@ -922,7 +948,6 @@ def run_developer(target_units, lid, forms, buildings, supply_fname,
 
     if new_buildings is None or len(new_buildings) == 0:
         return
-
     parcel_utils.add_buildings(dev.feasibility,
                                buildings,
                                new_buildings,
@@ -1064,6 +1089,7 @@ def neighborhood_vars(jobs, households, buildings):
 
     utils._convert_network_columns("networks_drv.yaml")
     nodes = networks.from_yaml(orca.get_injectable('net_drv'), "networks_drv.yaml")
+
     # print nodes.describe()
     # print pd.Series(nodes.index).describe()
     orca.add_table("nodes_drv", nodes)
